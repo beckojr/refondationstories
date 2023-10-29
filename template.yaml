@@ -1,45 +1,363 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
   refondationstories
-  
+
   Sample SAM Template for refondationstories
 
-# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
-Globals:
-  Function:
-    Timeout: 5
-    MemorySize: 128
+Parameters:
+  ApplicationNameParameter:
+    Type: String
+    Default: refondationstories
+    Description: Application name
+  EnvironmentParameter:
+    Type: String
+    Default: dev
+    Description: Application name
+    AllowedValues: [dev, staging, prod]
 
 Resources:
-  HelloWorldFunction:
-    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+  UserTable:
+    Type: AWS::DynamoDB::Table
     Properties:
-      CodeUri: hello-world/
-      Handler: hello-world
-      Runtime: go1.x
-      Architectures:
-        - x86_64
-      Events:
-        CatchAll:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
-          Properties:
-            Path: /hello
-            Method: GET
-      Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
-        Variables:
-          PARAM1: VALUE
+      AttributeDefinitions:
+        - AttributeName: _id
+          AttributeType: S
+        - AttributeName: pseudo
+          AttributeType: S
+      KeySchema:
+        - AttributeName: _id
+          KeyType: HASH
+        - AttributeName: pseudo
+          KeyType: RANGE
+
+  StoriesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ApplicationNameParameter}-${EnvironmentParameter}"
+      AttributeDefinitions:
+        - AttributeName: _id
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: _id
+          KeyType: HASH
+        - AttributeName: created_at
+          KeyType: RANGE
+
+  ApiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+      Policies:
+        - PolicyName: ApiDynamoDBPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: "APIGatewayRW"
+                Action:
+                  - "dynamodb:PutItem"
+                  - "dynamodb:Query"
+                Effect: Allow
+                Resource:
+                  - !GetAtt StoriesTable.Arn
+                  - !GetAtt UserTable.Arn
+  Api:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "api-${ApplicationNameParameter}-${EnvironmentParameter}"
+      Tags:
+        - Key: Env
+          Value: !Sub "${EnvironmentParameter}"
+
+  StoryModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref Api
+      ContentType: application/json
+      Description: Request body
+      Schema:
+        $schema: http://json-schema.org/draft-04/schema#
+        title: StoryModel
+        type: object
+        properties:
+          _id:
+            type: string
+          content:
+            type: string
+          upvotes:
+            type: integer
+            format: int32
+          downvotes:
+            type: integer
+            format: int32
+          author:
+            type: string
+        required: [content, author]
+
+  SuggestionModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref Api
+      ContentType: application/json
+      Description: Request body
+      Schema:
+        $schema: http://json-schema.org/draft-04/schema#
+        title: SuggestionModel
+        type: object
+        properties:
+          _id:
+            type: string
+          problem:
+            type: string
+          suggestion:
+            type: string
+          upvotes:
+            type: integer
+            format: int32
+          downvotes:
+            type: integer
+            format: int32
+          author:
+            type: string
+        required: [content, author]
+
+  PostMethodValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      Name: PostMethodValidator
+      RestApiId: !Ref Api
+      ValidateRequestBody: true
+      ValidateRequestParameters: false
+
+  StoryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt Api.RootResourceId
+      PathPart: stories
+      RestApiId: !Ref Api
+
+  StoryIDResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref StoryResource
+      PathPart: "{storyId}"
+      RestApiId: !Ref Api
+
+  SuggestionResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref StoryIDResource
+      PathPart: "suggestions"
+      RestApiId: !Ref Api
+
+  SuggestionIDResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref SuggestionResource
+      PathPart: "{suggestionId}"
+      RestApiId: !Ref Api
+
+  StoryGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: GET
+      ResourceId: !Ref StoryResource
+      RestApiId: !Ref Api
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayRole.Arn
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:dynamodb:action/Query"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: ""
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseTemplates:
+              application/json: '#set($inputRoot = $input.path("$")) { "stories": [ #foreach($story in $inputRoot.Items) { "_id": "$story._id.S", "content": "$story.content.S", "upvotes": "$story.upvotes.S", "downvotes": "$story.downvotes.S", "author": "$story.author.S" }#if($foreach.hasNext),#end #end ] }'
+
+  StoryPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: POST
+      ResourceId: !Ref StoryResource
+      RestApiId: !Ref Api
+      RequestValidatorId: !Ref PostMethodValidator
+      RequestModels:
+        application/json: !Ref StoryModel
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayRole.Arn
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:dynamodb:action/PutItem"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: '{"TableName":"","Item":{"_id":{"S":$input.json("$._id")},"content":{"S":$input.json("$.content")},"upvotes":{"S":$input.json("$.upvotes")},"downvotes":{"S":$input.json("$.downvotes")},"author":{"S":$input.json("$.author")}}}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseTemplates:
+              application/json: ""
+
+  StoryIDGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: GET
+      ResourceId: !Ref StoryIDResource
+      RestApiId: !Ref Api
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayRole.Arn
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:dynamodb:action/Query"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: ""
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseTemplates:
+              application/json: '#set($inputRoot = $input.path("$")) { "inputRoot": { "_id": "$inputRoot._id.S", "content": "$inputRoot.content.S", "upvotes": "$inputRoot.upvotes.S", "downvotes": "$inputRoot.downvotes.S", "author": "$inputRoot.author.S" } }'
+
+  StoryIDPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: POST
+      ResourceId: !Ref StoryIDResource
+      RestApiId: !Ref Api
+      RequestValidatorId: !Ref PostMethodValidator
+      RequestModels:
+        application/json: !Ref StoryModel
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayRole.Arn
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:dynamodb:action/PutItem"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: '{"TableName":"","Item":{"_id":{"S":$input.json("$._id")},"content":{"S":$input.json("$.content")},"upvotes":{"S":$input.json("$.upvotes")},"downvotes":{"S":$input.json("$.downvotes")},"author":{"S":$input.json("$.author")}}}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseTemplates:
+              application/json: ""
+
+  SuggestionGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: GET
+      ResourceId: !Ref SuggestionResource
+      RestApiId: !Ref Api
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayRole.Arn
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:dynamodb:action/Query"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: ""
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseTemplates:
+              application/json: '#set($inputRoot = $input.path("$")) { "suggestions": [ #foreach($sugg in $inputRoot.Items) { "_id": "$sugg._id.S", "problem": "$sugg.problem.S", "suggestion": "$sugg.suggestion.S", "upvotes": "$sugg.upvotes.S", "downvotes": "$sugg.downvotes.S", "author": "$sugg.author.S" }#if($foreach.hasNext),#end #end ] }'
+
+  SuggestionPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: POST
+      ResourceId: !Ref SuggestionResource
+      RestApiId: !Ref Api
+      RequestValidatorId: !Ref PostMethodValidator
+      RequestModels:
+        application/json: !Ref SuggestionModel
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayRole.Arn
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:dynamodb:action/PutItem"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: '{"TableName":"","Item":{"_id":{"S":$input.json("$._id")},"content":{"S":$input.json("$.content")},"upvotes":{"S":$input.json("$.upvotes")},"downvotes":{"S":$input.json("$.downvotes")},"author":{"S":$input.json("$.author")}}}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseTemplates:
+              application/json: ""
+
+  SuggestionIDGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: GET
+      ResourceId: !Ref SuggestionIDResource
+      RestApiId: !Ref Api
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayRole.Arn
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:dynamodb:action/Query"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: ""
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseTemplates:
+              application/json: '#set($inputRoot = $input.path("$")) { "suggestions": { "_id": "$sugg._id.S", "problem": "$sugg.problem.S", "suggestion": "$sugg.suggestion.S", "upvotes": "$sugg.upvotes.S", "downvotes": "$sugg.downvotes.S", "author": "$sugg.author.S" } }'
+
+  SuggestionIDPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: POST
+      ResourceId: !Ref SuggestionIDResource
+      RestApiId: !Ref Api
+      RequestValidatorId: !Ref PostMethodValidator
+      RequestModels:
+        application/json: !Ref SuggestionModel
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS
+        Credentials: !GetAtt ApiGatewayRole.Arn
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:dynamodb:action/PutItem"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: '{"TableName":"","Item":{"_id":{"S":$input.json("$._id")},"content":{"S":$input.json("$.content")},"upvotes":{"S":$input.json("$.upvotes")},"downvotes":{"S":$input.json("$.downvotes")},"author":{"S":$input.json("$.author")}}}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseTemplates:
+              application/json: ""
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref Api
+      StageName: !Sub "${EnvironmentParameter}"
+    DependsOn:
+      - StoryGetMethod
 
 Outputs:
-  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
-  # Find out more about other implicit resources you can reference within SAM
-  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
-  HelloWorldAPI:
-    Description: "API Gateway endpoint URL for Prod environment for First Function"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/hello/"
-  HelloWorldFunction:
-    Description: "First Lambda Function ARN"
-    Value: !GetAtt HelloWorldFunction.Arn
-  HelloWorldFunctionIamRole:
-    Description: "Implicit IAM Role created for Hello World function"
-    Value: !GetAtt HelloWorldFunctionRole.Arn
+  ApiRootUrl:
+    Description: "Root URL of the API"
+    Value: !Sub
+      - "https://${ApiId}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentParameter}"
+      - ApiId: !Ref Api

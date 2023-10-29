@@ -1,0 +1,208 @@
+openapi: "3.0.2"
+info:
+  title: Refondation stories API defintion
+  version: "1.0"
+servers:
+  - url: https://api.server.test/v1
+
+components:
+  schemas:
+    story:
+      type: object
+      properties:
+        _id:
+          type: string
+        content:
+          type: string
+        upvotes:
+          type: integer
+          format: int32
+        downvotes:
+          type: integer
+          format: int32
+        author:
+          type: string
+    suggestion:
+      type: object
+      properties:
+        _id:
+          type: string
+        content:
+          type: string
+        upvotes:
+          type: integer
+          format: int32
+        downvotes:
+          type: integer
+          format: int32
+        author:
+          type: string
+
+paths:
+  /stories:
+    get:
+      description: "Returns all stories from the system"
+      responses:
+        "200":
+          description: "A list of stories"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/story"
+    post:
+      requestBody:
+        description: New story to add
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/story"
+        required: true
+      responses:
+        "201":
+          description: New story added successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                $ref: "#/components/schemas/story"
+  /stories/{storyId}:
+    get:
+      description: "Returns a story by its ID"
+      parameters:
+        - name: StoryId
+          in: path
+          description: "ID of the story to update"
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "A story"
+          content:
+            application/json:
+              schema:
+                type: object
+                $ref: "#/components/schemas/story"
+    patch:
+      description: Update a story
+      parameters:
+        - name: StoryId
+          in: path
+          description: "ID of the story to update"
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              $ref: "#/components/schemas/story"
+              required: ["_id"]
+      responses:
+        "200":
+          description: "An updated story"
+          content:
+            application/json:
+              schema:
+                type: object
+                $ref: "#/components/schemas/story"
+
+  /stories/{storyId}/suggestions:
+    get:
+      description: "Get all suggestions of a story"
+      parameters:
+        - name: StoryId
+          in: path
+          description: "ID of the story to update"
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "List of suggestions of a story"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/suggestion"
+    post:
+      description: Add new suggestion to a story
+      parameters:
+        - name: StoryId
+          in: path
+          description: "ID of the story to add the suggestion to"
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              $ref: "#/components/schemas/suggestion"
+      responses:
+        "201":
+          description: "A new suggestion to the story"
+          content:
+            application/json:
+              schema:
+                type: object
+                $ref: "#/components/schemas/story"
+
+  /stories/{storyId}/suggestions{suggestionId}:
+    get:
+      description: "Get all suggestions of a story"
+      parameters:
+        - name: StoryId
+          in: path
+          description: "ID of the story"
+          required: true
+          schema:
+            type: string
+        - name: suggestionId
+          in: path
+          description: "ID of story's suggestion"
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "List of suggestions of a story"
+          content:
+            application/json:
+              schema:
+                type: object
+                $ref: "#/components/schemas/suggestion"
+    patch:
+      description: Add new suggestion to a story
+      parameters:
+        - name: StoryId
+          in: path
+          description: "ID of the story"
+          required: true
+          schema:
+            type: string
+        - name: suggestionId
+          in: path
+          description: "ID of story's suggestion"
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              $ref: "#/components/schemas/suggestion"
+      responses:
+        "200":
+          description: "An updated suggestion to the story"
+          content:
+            application/json:
+              schema:
+                type: object
+                $ref: "#/components/schemas/story"
